@@ -13,7 +13,7 @@ class BaseModel:
         # session and log
         self.graph = tf.Graph()
         self.sess = tf.Session(graph=self.graph)
-        self.train_writer = tf.summary.FileWriter(os.path.join(os.path.join(self.summary_dir, self.model_name), self.log_dir), self.sess.graph)
+        self.train_writer = tf.summary.FileWriter(os.path.join(self.summary_dir, self.model_name, self.log_dir), self.sess.graph)
         self.merged = tf.summary.merge_all()
         self.EP_log = 0
     # fundamental func

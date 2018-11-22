@@ -5,4 +5,4 @@ if __name__ == "__main__":
     # load data and split train & validation set
     # check if model already exist or not
     # loop iteration
-        # loop training
+        # loop feed in batch size
