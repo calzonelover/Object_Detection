@@ -55,9 +55,9 @@ val_dataset = data.VOCDetection(splits=[(2007, 'test')])
 print('Num of training images:', len(train_dataset))
 print('Num of validation images:', len(val_dataset))
 
-train_image, train_label = train_dataset[50:52]
+train_image, train_label = train_dataset[50]
 print('Image size (height, width, RGB):', train_image.shape)
-print('train label {}', train_label)
+print('train label', train_label, 'shape', train_label.shape)
 
 # class_ids = train_label[:, 4:5]
 # bounding_boxes = train_label[:, :4]
