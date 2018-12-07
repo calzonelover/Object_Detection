@@ -15,6 +15,9 @@ class YOLOv1(BaseModel):
         self.s_width = input_dim[0]/self.S
         self.s_height = input_dim[1]/self.S
         with self.graph.as_default():
+            with tf.name_scope("YOLO_parameters"):
+                self.lambda_coord = tf.constant(5.0, name='lambda_coord')
+                self.lambda_noobj = tf.constant(0.5, name='lambda_noobj')
             # placeholder
             with tf.name_scope("placeholder"):
                 self.x = tf.placeholder(tf.float32, shape=[self.batch_size, input_dim[0], input_dim[1], input_dim[2]], name="x_input")
@@ -99,6 +102,7 @@ class YOLOv1(BaseModel):
                 self.scores = tf.boolean_mask(self.anchor_cls_score, self.selected_anchor)
                 self.anchors = tf.boolean_mask(self.boxes_global_position, self.selected_anchor)
                 self.classes = tf.boolean_mask(self.anchor_cls, self.selected_anchor)
+                # print(self.anchor_cls.get_shape(), self.selected_anchor.get_shape(), self.classes.get_shape())
             # loss
             with tf.name_scope("Loss"):
                 with tf.name_scope("shred_y_label"):
@@ -120,11 +124,15 @@ class YOLOv1(BaseModel):
                     self.x_right_up_corner = tf.minimum(self.boxes_g_pos_flat_xmax, self.label_pos_tile_xmax)
                     self.y_right_up_corner = tf.minimum(self.boxes_g_pos_flat_ymax, self.label_pos_tile_ymax)
                     self.intersect_area = tf.maximum(tf.add(tf.subtract(self.x_right_up_corner, self.x_left_down_corner), 1), 0)*tf.maximum(tf.add(tf.subtract(self.y_right_up_corner, self.y_left_down_corner), 1), 0)
-                    self.area_label = None
-                    self.area_pred = None
-                    self.IOU = None # expect dim [-1, ?, S*S*B, 1]
-                    print(self.y_left_down_corner.get_shape())
-                    self.masked_responsible = None
+                    self.label_area = tf.multiply(tf.add(tf.subtract(self.label_pos_tile_xmax, self.label_pos_tile_xmin), 1), tf.add(tf.subtract(self.label_pos_tile_ymax, self.label_pos_tile_ymin), 1))
+                    self.pred_area = tf.multiply(tf.add(tf.subtract(self.boxes_g_pos_flat_xmax, self.boxes_g_pos_flat_xmin), 1), tf.add(tf.subtract(self.boxes_g_pos_flat_ymax, self.boxes_g_pos_flat_ymin), 1))
+                    self.iou = tf.reshape(tf.div(self.intersect_area, tf.add(self.label_area, self.pred_area)), [self.batch_size, -1, self.S*self.S*self.B])
+                    self.max_iou = tf.reshape(tf.reduce_max(self.iou, axis=-1), [self.batch_size, -1, 1])
+                    self.I_obj = tf.to_float(tf.equal(self.iou, self.max_iou))
+                    self.I_noobj = tf.to_float(tf.greater(1e-10, self.iou))
+                    print(self.I_noobj.get_shape())
+                    # print(self.iou.get_shape(), self.max_iou.get_shape(), self.I_obj.get_shape())
+                    # print("IOU: {}, max_IOU dim: {}".format(self.iou.get_shape(), self.max_iou.get_shape()))
                 with tf.name_scope("non-max-suppression"):
                     self.nms_indices = tf.image.non_max_suppression(self.anchors, self.scores, max_output_size=5, iou_threshold=0.5)
                     self.nms_scores = tf.gather(self.scores, self.nms_indices)
@@ -133,6 +141,10 @@ class YOLOv1(BaseModel):
                 with tf.name_scope("localization"):
                     self.loss_local = None
                 with tf.name_scope("width"):
+                    self.boxes_pixel_sqrt_width_flat = tf.reshape(self.boxes_pixel_sqrt_width, [self.batch_size, 1, self.S*self.S*self.B])
+                    self.selected_best_boxes_sqrt_width = tf.multiply(self.I_obj, self.boxes_pixel_sqrt_width_flat)
+                    print(self.boxes_pixel_sqrt_width_flat.get_shape())
+                    print(self.selected_best_boxes_sqrt_width.get_shape())
                     self.loss_width = None
                 with tf.name_scope("confidence"):
                     self.loss_conf = None
