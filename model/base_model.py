@@ -18,12 +18,14 @@ class BaseModel:
         self.EP_log = 0
     # fundamental func
     def init_variables(self):
-        init = tf.global_variables_initializer()
-        self.sess.run(init)
-    def save(self, dir, sess):
-        saver = tf.train.Saver(keep_checkpoint_every_n_hours=self.save_checkpoint_time)
-        saver.save(self.sess, os.path.join(self.save_dir, self.model_name))
-    def restore(self, dir, sess):
+        with self.graph.as_default():
+            init = tf.global_variables_initializer()
+            self.sess.run(init)
+    def save(self):
+        with self.graph.as_default():
+            saver = tf.train.Saver(keep_checkpoint_every_n_hours=self.save_checkpoint_time)
+            saver.save(self.sess, os.path.join(self.save_dir, self.model_name))
+    def restore(self):
         saver = tf.train.Save()
         saver.restore(self.sess, os.path.join(self.save_dir, self.model_name))
     @abc.abstractmethod

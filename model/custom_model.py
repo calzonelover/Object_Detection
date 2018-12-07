@@ -1,4 +1,5 @@
 import tensorflow as tf
+import numpy as np
 
 from model.base_model import BaseModel
 
@@ -103,19 +104,24 @@ class YOLOv1(BaseModel):
                 self.anchors = tf.boolean_mask(self.boxes_global_position, self.selected_anchor)
                 self.classes = tf.boolean_mask(self.anchor_cls, self.selected_anchor)
                 # print(self.anchor_cls.get_shape(), self.selected_anchor.get_shape(), self.classes.get_shape())
+            with tf.name_scope("shred_y_label"):
+                self.label_pos, self.label_cls, self.label_hard = tf.split(self.y_label, [4, 1, 1], 2)
+                self.label_pos_tile = tf.tile( tf.reshape(self.label_pos, [self.batch_size, -1, 1, 4]), [1, 1, self.S*self.S*self.B, 1]) # dim [BS, ?, S*S*B, 4]
+                self.label_xmin = tf.slice(self.label_pos, [0, 0, 0], [-1, -1, 1])
+                self.label_xmax = tf.slice(self.label_pos, [0, 0, 2], [-1, -1, 1])
+                self.label_ymin = tf.slice(self.label_pos, [0, 0, 1], [-1, -1, 1])
+                self.label_ymax = tf.slice(self.label_pos, [0, 0, 3], [-1, -1, 1])
+                self.label_global_x = tf.reduce_mean(tf.add(self.label_xmin, self.label_xmax), axis=-1)
+                self.label_global_y = tf.reduce_mean(tf.add(self.label_ymin, self.label_ymax), axis=-1)
+                self.r_label_width  = tf.sqrt(tf.subtract(self.label_xmax, self.label_xmin))
+                self.r_label_height = tf.sqrt(tf.subtract(self.label_ymax, self.label_ymin))
+            with tf.name_scope("non-max-suppression"):
+                self.nms_indices = tf.image.non_max_suppression(self.anchors, self.scores, max_output_size=5, iou_threshold=0.5)
+                self.nms_scores = tf.gather(self.scores, self.nms_indices)
+                self.nms_boxes = tf.gather(self.anchors, self.nms_indices)
+                self.nms_cls = tf.gather(self.classes, self.nms_indices)
             # loss
             with tf.name_scope("Loss"):
-                with tf.name_scope("shred_y_label"):
-                    self.label_pos, self.label_cls, self.label_hard = tf.split(self.y_label, [4, 1, 1], 2)
-                    self.label_pos_tile = tf.tile( tf.reshape(self.label_pos, [self.batch_size, -1, 1, 4]), [1, 1, self.S*self.S*self.B, 1]) # dim [BS, ?, S*S*B, 4]
-                    self.label_xmin = tf.slice(self.label_pos, [0, 0, 0], [-1, -1, 1])
-                    self.label_xmax = tf.slice(self.label_pos, [0, 0, 2], [-1, -1, 1])
-                    self.label_ymin = tf.slice(self.label_pos, [0, 0, 1], [-1, -1, 1])
-                    self.label_ymax = tf.slice(self.label_pos, [0, 0, 3], [-1, -1, 1])
-                    self.label_global_x = tf.reduce_mean(tf.add(self.label_xmin, self.label_xmax), axis=-1)
-                    self.label_global_y = tf.reduce_mean(tf.add(self.label_ymin, self.label_ymax), axis=-1)
-                    self.r_label_width  = tf.sqrt(tf.subtract(self.label_xmax, self.label_xmin))
-                    self.r_label_height = tf.sqrt(tf.subtract(self.label_ymax, self.label_ymin))
                 with tf.name_scope("IOU"):
                     self.boxes_g_pos_flat_xmin, self.boxes_g_pos_flat_xmax, self.boxes_g_pos_flat_ymin, self.boxes_g_pos_flat_ymax = tf.split(self.boxes_global_position_flat, [1,1,1,1], axis=-1)
                     self.label_pos_tile_xmin, self.label_pos_tile_ymin, self.label_pos_tile_xmax, self.label_pos_tile_ymax = tf.split(self.label_pos_tile, [1,1,1,1], axis=-1)
@@ -129,28 +135,40 @@ class YOLOv1(BaseModel):
                     self.iou = tf.reshape(tf.div(self.intersect_area, tf.add(self.label_area, self.pred_area)), [self.batch_size, -1, self.S*self.S*self.B])
                     self.max_iou = tf.reshape(tf.reduce_max(self.iou, axis=-1), [self.batch_size, -1, 1])
                     self.I_obj = tf.to_float(tf.equal(self.iou, self.max_iou))
+                    print("I_obj ", self.I_obj.get_shape())
                     self.I_noobj = tf.to_float(tf.greater(1e-10, self.iou))
-                    print(self.I_noobj.get_shape())
+                    print("I_noobj ",self.I_noobj.get_shape())
                     # print(self.iou.get_shape(), self.max_iou.get_shape(), self.I_obj.get_shape())
                     # print("IOU: {}, max_IOU dim: {}".format(self.iou.get_shape(), self.max_iou.get_shape()))
-                with tf.name_scope("non-max-suppression"):
-                    self.nms_indices = tf.image.non_max_suppression(self.anchors, self.scores, max_output_size=5, iou_threshold=0.5)
-                    self.nms_scores = tf.gather(self.scores, self.nms_indices)
-                    self.nms_boxes = tf.gather(self.anchors, self.nms_indices)
-                    self.nms_cls = tf.gather(self.classes, self.nms_indices)
                 with tf.name_scope("localization"):
-                    self.loss_local = None
+                    self.boxes_global_x_rs = tf.reshape(self.boxes_global_x, [-1, 1, self.S*self.S*self.B])
+                    self.resp_boxes_x = tf.reduce_max(tf.multiply(self.I_obj, self.boxes_global_x_rs), axis=-1) # [BS, ?]
+                    self.boxes_global_y_rs = tf.reshape(self.boxes_global_y, [-1, 1, self.S*self.S*self.B])
+                    self.resp_boxes_y = tf.reduce_max(tf.multiply(self.I_obj, self.boxes_global_y_rs), axis=-1) # [BS, ?]
+                    self.loss_local_x2 = tf.square(tf.subtract(self.resp_boxes_x, self.label_global_x))
+                    self.loss_local_y2 = tf.square(tf.subtract(self.resp_boxes_y, self.label_global_y))
+                    self.loss_local = self.lambda_coord*tf.reduce_sum(tf.add(self.loss_local_x2, self.loss_local_y2)) # scalar
                 with tf.name_scope("width"):
-                    self.boxes_pixel_sqrt_width_flat = tf.reshape(self.boxes_pixel_sqrt_width, [self.batch_size, 1, self.S*self.S*self.B])
-                    self.selected_best_boxes_sqrt_width = tf.multiply(self.I_obj, self.boxes_pixel_sqrt_width_flat)
-                    print(self.boxes_pixel_sqrt_width_flat.get_shape())
-                    print(self.selected_best_boxes_sqrt_width.get_shape())
-                    self.loss_width = None
+                    self.boxes_pixel_sqrt_width_rs = tf.reshape(self.boxes_pixel_sqrt_width, [self.batch_size, 1, self.S*self.S*self.B])
+                    self.boxes_pixel_sqrt_height_rs = tf.reshape(self.boxes_pixel_sqrt_height, [self.batch_size, 1, self.S*self.S*self.B])
+                    self.resp_boxes_sqrt_width = tf.reduce_max(tf.multiply(self.I_obj, self.boxes_pixel_sqrt_width_rs), axis=-1) # [BS, ?]
+                    self.resp_boxes_sqrt_height = tf.reduce_max(tf.multiply(self.I_obj, self.boxes_pixel_sqrt_height_rs), axis=-1) # [BS, ?]
+                    self.r_label_width_rs = tf.reshape(self.r_label_width, [self.batch_size, -1])
+                    self.r_label_height_rs = tf.reshape(self.r_label_height, [self.batch_size, -1])
+                    self.loss_width_w = tf.square(tf.subtract(self.resp_boxes_sqrt_width, self.r_label_width_rs), name='loss_width_horizontal')
+                    self.loss_width_h = tf.square(tf.subtract(self.resp_boxes_sqrt_height, self.r_label_height_rs), name='loss_width_vertical')
+                    self.loss_width = tf.multiply(self.lambda_coord, tf.reduce_sum(tf.add(self.loss_width_w, self.loss_width_h)), name='loss_width')
                 with tf.name_scope("confidence"):
-                    self.loss_conf = None
+                    self.boxes_confidence_rs = tf.reshape(self.boxes_confidence, [-1, 1, self.S*self.S*self.B])
+                    self.max_iou_rs = tf.reshape(self.max_iou, [self.batch_size, -1])
+                    self.resp_boxes_confidence = tf.reduce_max(tf.multiply(self.I_obj, self.boxes_confidence_rs), axis=-1)
+                    self.noobj_boxes_confidence = tf.multiply(self.I_noobj, self.boxes_confidence_rs) # [BS, -1, S*S*B]
+                    self.loss_conf_obj = tf.reduce_sum(tf.square(tf.subtract(self.resp_boxes_confidence, self.max_iou_rs)), name='loss_confidence_obj') # scalar
+                    self.loss_conf_noobj = tf.reduce_sum(tf.square(tf.subtract(self.noobj_boxes_confidence, self.iou)), name='loss_confidence_noobj') # scalar
+                    self.loss_conf = tf.add(self.loss_conf_obj, self.loss_conf_noobj, name='loss_confidence')
                 with tf.name_scope("clssification"):
                     self.loss_cls = None
-                self.loss = None
+                # self.total_loss = tf.div(self.loss_local + self.loss_width + self.loss_conf + self.loss_cls, self.batch_size, name='total_loss')
             # optimizer
             with tf.name_scope("Optimizer"):
                 self.optimizer = None # tf.train.AdamOptimizer(self.learning_rate).minimize(self.loss)
@@ -163,3 +181,9 @@ class YOLOv1(BaseModel):
         return
     def train(self, x_batch, y_label_batch):
         pass
+    def log_summary(self): # for log per EP only
+        with self.graph.as_default():
+            x0 = np.random.randint(10, size=(5, 448, 448, 3))
+            y0_label = np.random.randint(10, size=(5, 3, 6))
+            summary = self.sess.run([self.merged], feed_dict={self.x: x0, self.y_label: y0_label})
+            self.train_writer.add_summary(summary, 1)
