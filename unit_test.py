@@ -59,6 +59,15 @@ train_image, train_label = train_dataset[50]
 print('Image size (height, width, RGB):', train_image.shape)
 print('train label', train_label, 'shape', train_label.shape)
 
+
+train_image, train_label = train_dataset[52]
+print('Image size (height, width, RGB):', train_image.shape)
+print('train label', train_label, 'shape', train_label.shape)
+
+
+train_image, train_label = train_dataset[100]
+print('Image size (height, width, RGB):', train_image.shape)
+print('train label', train_label, 'shape', train_label.shape)
 # class_ids = train_label[:, 4:5]
 # bounding_boxes = train_label[:, :4]
 

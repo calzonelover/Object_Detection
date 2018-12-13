@@ -1,5 +1,8 @@
 # YOLO object detection
 
+## Issue
+* Not sure input pixel match 448x448x3 or not
+
 ## Plan
 * Prepare datasets 
     * Pascal VOC 2007 with 20 classes

@@ -168,6 +168,10 @@ class YOLOv1(BaseModel):
                     self.loss_conf = tf.add(self.loss_conf_obj, self.loss_conf_noobj, name='loss_confidence')
                 with tf.name_scope("clssification"):
                     self.loss_cls = None
+                    self.label_cls_rs = tf.reshape(self.label_cls, [self.batch_size, -1])
+                    self.label_cls_one_hot = tf.one_hot(tf.cast(self.label_cls_rs, tf.int32), depth=self.C, axis=-1)
+                    self.label_cls_one_hot_tiled = tf.tile(tf.reshape(self.label_cls_one_hot, [self.batch_size, -1, 1, self.C]), [1,1,self.S*self.S, 1])
+                    print(self.I_obj.get_shape())
                 # self.total_loss = tf.div(self.loss_local + self.loss_width + self.loss_conf + self.loss_cls, self.batch_size, name='total_loss')
             # optimizer
             with tf.name_scope("Optimizer"):
@@ -181,9 +185,9 @@ class YOLOv1(BaseModel):
         return
     def train(self, x_batch, y_label_batch):
         pass
-    def log_summary(self): # for log per EP only
-        with self.graph.as_default():
-            x0 = np.random.randint(10, size=(5, 448, 448, 3))
-            y0_label = np.random.randint(10, size=(5, 3, 6))
-            summary = self.sess.run([self.merged], feed_dict={self.x: x0, self.y_label: y0_label})
-            self.train_writer.add_summary(summary, 1)
+    # def log_summary(self): # for log per EP only
+    #     with self.graph.as_default():
+    #         x0 = np.random.randint(10, size=(5, 448, 448, 3))
+    #         y0_label = np.random.randint(10, size=(5, 3, 6))
+    #         summary = self.sess.run([self.merged], feed_dict={self.x: x0, self.y_label: y0_label})
+    #         self.train_writer.add_summary(summary, 1)
