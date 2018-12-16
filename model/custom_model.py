@@ -138,6 +138,8 @@ class YOLOv1(BaseModel):
                     print("I_obj ", self.I_obj.get_shape())
                     self.I_noobj = tf.to_float(tf.greater(1e-10, self.iou))
                     print("I_noobj ",self.I_noobj.get_shape())
+                    self.I_obj_i = tf.to_float(tf.greater(self.iou, 1e-10))
+                    print("I_obj_i", self.I_obj_i.get_shape())
                     # print(self.iou.get_shape(), self.max_iou.get_shape(), self.I_obj.get_shape())
                     # print("IOU: {}, max_IOU dim: {}".format(self.iou.get_shape(), self.max_iou.get_shape()))
                 with tf.name_scope("localization"):
@@ -167,12 +169,13 @@ class YOLOv1(BaseModel):
                     self.loss_conf_noobj = tf.reduce_sum(tf.square(tf.subtract(self.noobj_boxes_confidence, self.iou)), name='loss_confidence_noobj') # scalar
                     self.loss_conf = tf.add(self.loss_conf_obj, self.loss_conf_noobj, name='loss_confidence')
                 with tf.name_scope("clssification"):
-                    self.loss_cls = None
                     self.label_cls_rs = tf.reshape(self.label_cls, [self.batch_size, -1])
                     self.label_cls_one_hot = tf.one_hot(tf.cast(self.label_cls_rs, tf.int32), depth=self.C, axis=-1)
-                    self.label_cls_one_hot_tiled = tf.tile(tf.reshape(self.label_cls_one_hot, [self.batch_size, -1, 1, self.C]), [1,1,self.S*self.S, 1])
-                    print(self.I_obj.get_shape())
-                # self.total_loss = tf.div(self.loss_local + self.loss_width + self.loss_conf + self.loss_cls, self.batch_size, name='total_loss')
+                    self.label_cls_one_hot_tiled = tf.tile(tf.reshape(self.label_cls_one_hot, [self.batch_size, -1, 1, self.C]), [1,1,self.S*self.S*self.B, 1])
+                    self.pred_cls_rs = tf.reshape(tf.tile(tf.reshape(self.softmaxed_boxes_cls, [self.batch_size, self.S*self.S, self.C]), [1,self.B,1]), [self.batch_size, 1, self.S*self.S*self.B, self.C])
+                    self.loss_cls = tf.reduce_sum(tf.square(tf.subtract(self.label_cls_one_hot_tiled, self.pred_cls_rs)), name='loss_class')
+                self.total_loss = tf.div(self.loss_local + self.loss_width + self.loss_conf + self.loss_cls, self.batch_size, name='total_loss')
+                print(self.total_loss.get_shape())
             # optimizer
             with tf.name_scope("Optimizer"):
                 self.optimizer = None # tf.train.AdamOptimizer(self.learning_rate).minimize(self.loss)
