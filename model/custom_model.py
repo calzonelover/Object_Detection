@@ -25,7 +25,8 @@ class YOLOv1(BaseModel):
                 self.y_label = tf.placeholder(tf.float32, shape=[self.batch_size, None, 6], name="y_label")
             # graph connection of cnn net ( out dim has to be S*S*bb*(5+n_classes) )
             with tf.name_scope("Convolution"):
-                self.conv1 = self.conv_layer(self.x, shape=[self.S, self.S, 3, 64], strides=[2, 2])	# shape = [size, size, old_channel, new_channel]
+                self.x_norm = tf.div(self.x, 448.0)
+                self.conv1 = self.conv_layer(self.x_norm, shape=[self.S, self.S, 3, 64], strides=[2, 2])	# shape = [size, size, old_channel, new_channel]
                 self.max_pool1 = self.max_pool(self.conv1, kernel_size=[2, 2], strides=[2, 2])
 
                 self.conv2 =  self.conv_layer(self.max_pool1, shape=[3, 3, 64, 192], strides=[1, 1])
@@ -62,17 +63,17 @@ class YOLOv1(BaseModel):
 
                 self.conv24_flat = tf.layers.flatten(self.conv24)
 
-                self.fc1 = self.fc_layer(self.conv24_flat, size=4096)
+                self.fc1 = tf.nn.leaky_relu(self.fc_layer(self.conv24_flat, size=4096))
                 self.fc1_drop = tf.nn.dropout(self.fc1, keep_prob=1.0-0.5)
 
-                self.fc2 = self.fc_layer(self.fc1_drop, size=1470)
+                self.fc2 = tf.nn.relu(self.fc_layer(self.fc1_drop, size=1470))
                 self.fc2_reshape = tf.reshape(self.fc2, [-1, self.S, self.S, 5*self.B+self.C])
                 
-                self.conv_out = tf.truncated_normal(shape=[self.batch_size, self.S, self.S, 5*self.B+self.C], stddev=0.1)
+                # self.conv_out = tf.truncated_normal(shape=[self.batch_size, self.S, self.S, 5*self.B+self.C], stddev=0.1)
             # bonding boxes and filtering
             with tf.name_scope("Bounding_Boxes"): 
                 # size boxes = [-1, S, S, B, 4], size boxes_confidence = [-1, S, S, 1], size boxes_cls = [-1, S, S, 20]
-                self.boxes, self.boxes_confidence, self.boxes_cls = tf.split(self.conv_out, [4*self.B, self.B, self.C], 3)
+                self.boxes, self.boxes_confidence, self.boxes_cls = tf.split(self.fc2_reshape, [4*self.B, self.B, self.C], 3)
                 self.boxes = tf.reshape(self.boxes, [-1, self.S, self.S, self.B, 4])
                 self.boxes_confidence = tf.reshape(self.boxes_confidence, [-1, self.S, self.S, self.B, 1])
                 self.softmaxed_boxes_cls = tf.nn.softmax(self.boxes_cls)
@@ -135,13 +136,8 @@ class YOLOv1(BaseModel):
                     self.iou = tf.reshape(tf.div(self.intersect_area, tf.add(self.label_area, self.pred_area)), [self.batch_size, -1, self.S*self.S*self.B])
                     self.max_iou = tf.reshape(tf.reduce_max(self.iou, axis=-1), [self.batch_size, -1, 1])
                     self.I_obj = tf.to_float(tf.equal(self.iou, self.max_iou))
-                    print("I_obj ", self.I_obj.get_shape())
                     self.I_noobj = tf.to_float(tf.greater(1e-10, self.iou))
-                    print("I_noobj ",self.I_noobj.get_shape())
                     self.I_obj_i = tf.to_float(tf.greater(self.iou, 1e-10))
-                    print("I_obj_i", self.I_obj_i.get_shape())
-                    # print(self.iou.get_shape(), self.max_iou.get_shape(), self.I_obj.get_shape())
-                    # print("IOU: {}, max_IOU dim: {}".format(self.iou.get_shape(), self.max_iou.get_shape()))
                 with tf.name_scope("localization"):
                     self.boxes_global_x_rs = tf.reshape(self.boxes_global_x, [-1, 1, self.S*self.S*self.B])
                     self.resp_boxes_x = tf.reduce_max(tf.multiply(self.I_obj, self.boxes_global_x_rs), axis=-1) # [BS, ?]
@@ -150,6 +146,7 @@ class YOLOv1(BaseModel):
                     self.loss_local_x2 = tf.square(tf.subtract(self.resp_boxes_x, self.label_global_x))
                     self.loss_local_y2 = tf.square(tf.subtract(self.resp_boxes_y, self.label_global_y))
                     self.loss_local = self.lambda_coord*tf.reduce_sum(tf.add(self.loss_local_x2, self.loss_local_y2)) # scalar
+                    tf.summary.scalar("Loss_local", self.loss_local)
                 with tf.name_scope("width"):
                     self.boxes_pixel_sqrt_width_rs = tf.reshape(self.boxes_pixel_sqrt_width, [self.batch_size, 1, self.S*self.S*self.B])
                     self.boxes_pixel_sqrt_height_rs = tf.reshape(self.boxes_pixel_sqrt_height, [self.batch_size, 1, self.S*self.S*self.B])
@@ -160,6 +157,7 @@ class YOLOv1(BaseModel):
                     self.loss_width_w = tf.square(tf.subtract(self.resp_boxes_sqrt_width, self.r_label_width_rs), name='loss_width_horizontal')
                     self.loss_width_h = tf.square(tf.subtract(self.resp_boxes_sqrt_height, self.r_label_height_rs), name='loss_width_vertical')
                     self.loss_width = tf.multiply(self.lambda_coord, tf.reduce_sum(tf.add(self.loss_width_w, self.loss_width_h)), name='loss_width')
+                    tf.summary.scalar("Loss_width", self.loss_width)
                 with tf.name_scope("confidence"):
                     self.boxes_confidence_rs = tf.reshape(self.boxes_confidence, [-1, 1, self.S*self.S*self.B])
                     self.max_iou_rs = tf.reshape(self.max_iou, [self.batch_size, -1])
@@ -168,29 +166,35 @@ class YOLOv1(BaseModel):
                     self.loss_conf_obj = tf.reduce_sum(tf.square(tf.subtract(self.resp_boxes_confidence, self.max_iou_rs)), name='loss_confidence_obj') # scalar
                     self.loss_conf_noobj = tf.reduce_sum(tf.square(tf.subtract(self.noobj_boxes_confidence, self.iou)), name='loss_confidence_noobj') # scalar
                     self.loss_conf = tf.add(self.loss_conf_obj, self.loss_conf_noobj, name='loss_confidence')
+                    tf.summary.scalar("Loss_confidence", self.loss_conf)
                 with tf.name_scope("clssification"):
                     self.label_cls_rs = tf.reshape(self.label_cls, [self.batch_size, -1])
                     self.label_cls_one_hot = tf.one_hot(tf.cast(self.label_cls_rs, tf.int32), depth=self.C, axis=-1)
                     self.label_cls_one_hot_tiled = tf.tile(tf.reshape(self.label_cls_one_hot, [self.batch_size, -1, 1, self.C]), [1,1,self.S*self.S*self.B, 1])
                     self.pred_cls_rs = tf.reshape(tf.tile(tf.reshape(self.softmaxed_boxes_cls, [self.batch_size, self.S*self.S, self.C]), [1,self.B,1]), [self.batch_size, 1, self.S*self.S*self.B, self.C])
                     self.loss_cls = tf.reduce_sum(tf.square(tf.subtract(self.label_cls_one_hot_tiled, self.pred_cls_rs)), name='loss_class')
+                    tf.summary.scalar("Loss_class", self.loss_cls)
                 self.total_loss = tf.div(self.loss_local + self.loss_width + self.loss_conf + self.loss_cls, self.batch_size, name='total_loss')
-                print(self.total_loss.get_shape())
+                tf.summary.scalar("Total_loss", self.total_loss)
             # optimizer
             with tf.name_scope("Optimizer"):
-                self.optimizer = None # tf.train.AdamOptimizer(self.learning_rate).minimize(self.loss)
+                self.optimizer = tf.train.AdamOptimizer(self.learning_rate).minimize(self.total_loss)
             with tf.name_scope("Goodness"):
                 self.accuracy = None
-    def inference(self, **kwargs):
-        scores, boxes, classes = self.sess.run([self.nms_scores, self.nms_boxes, self.nms_cls], feed_dict={})
+    def inference(self, x_batch, y_label_batch):
+        scores, boxes, classes = self.sess.run([self.boxes_confidence, self.boxes_global_position, self.boxes_cls], feed_dict={self.x: x_batch, self.y_label: y_label_batch})
         return scores, boxes, classes
-    def predict(self, **kwargs):
-        return
+    def predict(self, x_batch, y_label_batch):
+        scores, boxes, classes = self.sess.run([self.nms_scores, self.nms_boxes, self.nms_cls], feed_dict={self.x: x_batch, self.y_label: y_label_batch})
+        return scores, boxes, classes
     def train(self, x_batch, y_label_batch):
-        pass
-    # def log_summary(self): # for log per EP only
-    #     with self.graph.as_default():
-    #         x0 = np.random.randint(10, size=(5, 448, 448, 3))
-    #         y0_label = np.random.randint(10, size=(5, 3, 6))
-    #         summary = self.sess.run([self.merged], feed_dict={self.x: x0, self.y_label: y0_label})
-    #         self.train_writer.add_summary(summary, 1)
+        _, l, loss_cls = self.sess.run([self.optimizer, self.total_loss, self.loss_cls], feed_dict={self.x: x_batch, self.y_label: y_label_batch})
+        print('loss ', l, 'loss_cls', loss_cls)
+        # print('check value: ', c)
+        print('===========================================================')
+        # input()
+        self.EP_log += 1
+        # self.train_writer.add_summary(summary, self.EP_log)
+    def log_summary(self, x_input_test, y_label_test): # for log per EP only
+        summary = self.sess.run([self.merged], feed_dict={self.x: x_input_test, self.y_label: y_label_test})
+        self.train_writer.add_summary(summary, EP)

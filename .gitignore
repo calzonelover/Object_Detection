@@ -58,3 +58,7 @@ Temporary Items
 .history
 
 # End of https://www.gitignore.io/api/osx,linux,visualstudiocode
+
+
+/datasets/train.tfrecords
+/datasets/val.tfrecords

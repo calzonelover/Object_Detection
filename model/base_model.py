@@ -13,8 +13,9 @@ class BaseModel:
         # session and log
         self.graph = tf.Graph()
         self.sess = tf.Session(graph=self.graph)
-        self.train_writer = tf.summary.FileWriter(os.path.join(self.summary_dir, self.model_name, self.log_dir), self.sess.graph)
-        self.merged = tf.summary.merge_all()
+        with self.graph.as_default():
+            self.train_writer = tf.summary.FileWriter(os.path.join(self.summary_dir, self.model_name, self.log_dir), self.sess.graph)
+            self.merged = tf.summary.merge_all()
         self.EP_log = 0
     # fundamental func
     def init_variables(self):
@@ -26,8 +27,9 @@ class BaseModel:
             saver = tf.train.Saver(keep_checkpoint_every_n_hours=self.save_checkpoint_time)
             saver.save(self.sess, os.path.join(self.save_dir, self.model_name))
     def restore(self):
-        saver = tf.train.Save()
-        saver.restore(self.sess, os.path.join(self.save_dir, self.model_name))
+        with self.graph.as_default():
+            saver = tf.train.Save()
+            saver.restore(self.sess, os.path.join(self.save_dir, self.model_name))
     @abc.abstractmethod
     def inference(self, x):
         return
